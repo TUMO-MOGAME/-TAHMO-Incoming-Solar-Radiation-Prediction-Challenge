@@ -1,9 +1,14 @@
 """Cross-validation splitters.
 
-The competition holds out *even months of Year 1* per station. Our primary
-splitter mimics this by holding out even months from training. Random K-fold
-over rows would leak across the 15-minute autocorrelation horizon and is
-explicitly avoided.
+EDA finding: train contains only odd months {1,3,5,7,9,11} and test contains
+only even months {2,4,6,8,10,12}, across all 2016-2020. The competition is
+"predict the months you have never seen." Random K-fold over rows would leak
+across the 15-minute autocorrelation horizon and is explicitly avoided.
+
+Primary CV: LeaveOneMonthOutSplitter holds out one odd month at a time —
+the closest simulation of test conditions we can build from train alone.
+
+Secondary CV: TimeForwardSplitter for leakage sanity checks.
 """
 from __future__ import annotations
 
@@ -22,48 +27,39 @@ class Fold:
     description: str
 
 
-class EvenMonthHoldoutSplitter:
-    """Rotate held-out even months across folds.
+class LeaveOneMonthOutSplitter:
+    """Hold out one month at a time as validation.
 
-    Example with n_folds=3 over even_months=[2, 4, 6, 8, 10, 12]:
-        fold 0 -> validate on months {2, 4},  train on rest
-        fold 1 -> validate on months {6, 8},  train on rest
-        fold 2 -> validate on months {10, 12}, train on rest
+    Default `months=[1, 3, 5, 7, 9, 11]` matches the months actually present
+    in the competition train set. The model trained on 5 odd months is
+    evaluated on the 6th — the closest analogue to test (even months) we
+    can simulate from train alone.
 
-    Splits are applied globally — every station contributes to both train and
-    valid in each fold, matching how the competition holds out months per
-    station rather than holding out whole stations.
+    Splits are applied globally: every station that has data in the held-out
+    month contributes to valid, mirroring the competition where every station
+    contributes to test.
     """
 
     def __init__(
         self,
-        even_months: list[int] | None = None,
-        n_folds: int = 3,
+        months: list[int] | None = None,
         timestamp_col: str = "timestamp",
     ) -> None:
-        self.even_months = even_months or [2, 4, 6, 8, 10, 12]
-        if any(m % 2 != 0 for m in self.even_months):
-            raise ValueError("even_months must contain only even integers")
-        self.n_folds = n_folds
+        self.months = months or [1, 3, 5, 7, 9, 11]
         self.timestamp_col = timestamp_col
-
-    def _month_chunks(self) -> list[list[int]]:
-        """Partition even_months into n_folds contiguous chunks."""
-        return [list(c) for c in np.array_split(np.array(self.even_months), self.n_folds)]
 
     def split(self, df: pd.DataFrame) -> Iterator[Fold]:
         if self.timestamp_col not in df.columns:
             raise KeyError(f"timestamp column '{self.timestamp_col}' missing")
         months = pd.to_datetime(df[self.timestamp_col]).dt.month.to_numpy()
         all_idx = np.arange(len(df))
-        chunks = self._month_chunks()
-        for fold_id, valid_months in enumerate(chunks):
-            valid_mask = np.isin(months, valid_months)
+        for fold_id, valid_month in enumerate(self.months):
+            valid_mask = months == valid_month
             yield Fold(
                 fold_id=fold_id,
                 train_idx=all_idx[~valid_mask],
                 valid_idx=all_idx[valid_mask],
-                description=f"valid_months={valid_months}",
+                description=f"valid_month={valid_month}",
             )
 
 
@@ -122,16 +118,15 @@ class TimeForwardSplitter:
             )
 
 
-def make_splitter(cfg: dict) -> EvenMonthHoldoutSplitter | TimeForwardSplitter:
+def make_splitter(cfg: dict) -> LeaveOneMonthOutSplitter | TimeForwardSplitter:
     """Factory: build a splitter from the cv section of config.yaml."""
     cv = cfg["cv"]
     ts_col = cfg["columns"]["timestamp"]
     station_col = cfg["columns"]["station"]
     name = cv["splitter"]
-    if name == "even_month_holdout":
-        return EvenMonthHoldoutSplitter(
-            even_months=cv.get("even_months"),
-            n_folds=cv["n_folds"],
+    if name == "leave_one_month_out":
+        return LeaveOneMonthOutSplitter(
+            months=cv.get("train_months"),
             timestamp_col=ts_col,
         )
     if name == "time_forward":

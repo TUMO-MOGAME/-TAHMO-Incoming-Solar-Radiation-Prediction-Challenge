@@ -1,0 +1,35 @@
+{
+  "n": 642175,
+  "mbe": -1.073898892403164,
+  "abs_mbe": 1.073898892403164,
+  "rmse": 100.32830977213862,
+  "combined": 50.701104332270894,
+  "splitter": "LeaveOneMonthOutSplitter",
+  "n_features": 21,
+  "feature_names": [
+    "precipitation_mm",
+    "relativehumidity",
+    "temperature_degrees_Celsius",
+    "station",
+    "installation_height",
+    "elevation",
+    "latitude",
+    "longitude",
+    "year",
+    "month",
+    "day",
+    "hour",
+    "minute",
+    "day_of_week",
+    "day_of_year",
+    "hour_sin",
+    "hour_cos",
+    "month_sin",
+    "month_cos",
+    "day_of_year_sin",
+    "day_of_year_cos"
+  ],
+  "categorical_features": [
+    "station"
+  ]
+}

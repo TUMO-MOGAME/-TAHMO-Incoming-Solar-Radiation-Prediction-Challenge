@@ -26,13 +26,16 @@ All raw competition files live in `data/raw/` (gitignored — too large).
 
 **Columns** (Train.csv): `ID`, `timestamp`, `precipitation (mm)`, `radiation (W/m²)` *(target)*, `relativehumidity (-)`, `temperature (degrees Celsius)`, `station`, `station_name`, `country`, `installation_height`, `elevation`, `latitude`, `longitude`.
 
-**Key facts:**
+**Key facts (confirmed by EDA on 2026-05-14):**
 - 40 stations, all appearing in both train and test
 - Train date range: 2016-01-11 → 2020-11-30
 - Test date range: 2016-02-01 → 2020-12-31
-- No missing values in the core columns
-- `ID` format: `{stationhash}_{YYYY-MM}_{random6}` — month is embedded in the ID
-- Target is non-negative; large fraction of zeros (nighttime)
+- **Train contains only ODD months {1, 3, 5, 7, 9, 11}. Test contains only EVEN months {2, 4, 6, 8, 10, 12}.** This is the central challenge — the model must predict months it has never seen.
+- The earlier reading of "withheld even months of Year 1" was misleading; the split is global across all 2016-2020 years.
+- 39/40 stations have full coverage of all 6 odd months in train; TA00118 has effectively no January data.
+- Target is non-negative; observed max = 1427 W/m²; **50.3% of training rows have target == 0** (nighttime).
+- No missing values in the core columns.
+- `ID` format: `{stationhash}_{YYYY-MM}_{random6}` — month embedded in the ID matches the timestamp.
 
 **Use only this data.** No external EO/reanalysis data permitted in our approach (user decision).
 
@@ -53,10 +56,10 @@ Our combined CV score: see `src/cv/evaluate.py`.
 
 ## 4. Cross-validation strategy
 
-The test set is the **withheld even months of Year 1** per station. Our CV must mimic this.
+The test set is the **even months** while train is the **odd months** of every year. Train has zero data in months 2, 4, 6, 8, 10, 12 — so we cannot hold out even months. Instead, we simulate the "predict an unseen month" challenge by leave-one-month-out over the 6 odd months.
 
-**Primary CV** (`src/cv/splitters.py: EvenMonthHoldoutSplitter`):
-Hold out one or more even months from train; train on the rest; score MBE+RMSE on the held-out portion. Rotate which even months are held out across folds.
+**Primary CV** (`src/cv/splitters.py: LeaveOneMonthOutSplitter`):
+6 folds. For each fold, hold out one odd month from train, fit on the other five, score MBE+RMSE on the held-out month. Each fold's validation is the closest analogue to the test challenge we can build from train alone.
 
 **Secondary CV** (`src/cv/splitters.py: TimeForwardSplitter`):
 Per-station forward-walking time splits — sanity check for temporal leakage.
@@ -69,21 +72,20 @@ Per-station forward-walking time splits — sanity check for temporal leakage.
 
 | Stage | Module | Status |
 |-------|--------|--------|
-| 1. Data ingestion | `src/data/load.py`, `validate.py`, `make_dataset.py` | Scaffolded |
-| 2. EDA | `notebooks/01_eda.ipynb` | TODO |
-| 3. CV scaffolding | `src/cv/splitters.py`, `evaluate.py` | Scaffolded |
-| 4. Baseline reproduction | `src/cv/run_cv.py` | TODO |
-| 5. Time features | `src/features/time_features.py` | Skeleton |
-| 6. Solar geometry features | `src/features/solar_geometry.py` | Skeleton |
+| 1. Data ingestion | `src/data/load.py`, `validate.py`, `make_dataset.py` | Done |
+| 2. EDA | inline scripts (no notebook until end) | Done — findings in §2, §8 |
+| 3. CV scaffolding | `src/cv/splitters.py`, `evaluate.py` | Done |
+| 4. Baseline LightGBM (time features only) | `src/cv/run_cv.py`, `src/models/lgbm.py` | Done — exp_001 |
+| 5. Time features | `src/features/time_features.py` | Done |
+| 6. Solar geometry features | `src/features/solar_geometry.py` | Skeleton — NEXT priority |
 | 7. Weather lag/rolling features | `src/features/weather_features.py` | Skeleton |
 | 8. Station-level features | `src/features/station_features.py` | Skeleton |
-| 9. LightGBM model | `src/models/lgbm.py` | Skeleton |
-| 10. XGBoost model | `src/models/xgb.py` | Skeleton |
-| 11. CatBoost model | `src/models/catboost.py` | Skeleton |
-| 12. Ensemble | `src/models/ensemble.py` | Skeleton |
-| 13. MBE-vs-RMSE column investigation | `src/submit.py` | TODO |
-| 14. Final submission | `src/train.py`, `predict.py`, `submit.py` | Skeleton |
-| 15. Reproduction notebook | `notebooks/reproduce_winning_solution.ipynb` | Built last |
+| 9. XGBoost model | `src/models/xgb.py` | Skeleton |
+| 10. CatBoost model | `src/models/catboost.py` | Skeleton |
+| 11. Ensemble | `src/models/ensemble.py` | Skeleton |
+| 12. MBE-vs-RMSE column investigation | `src/submit.py` | TODO |
+| 13. Final submission | `src/train.py`, `predict.py`, `submit.py` | Skeleton |
+| 14. Reproduction notebook | `notebooks/reproduce_winning_solution.ipynb` | Built last |
 
 ---
 
@@ -120,34 +122,41 @@ python -m src.submit --config config/config.yaml
 
 **Date:** 2026-05-14
 
-- Project scaffolded: folder structure, configs, data loading, CV splitter, evaluation metric.
-- Baseline starter notebook is preserved at `notebooks/tahmo_starter_notebook.ipynb` for reference.
-- **No models trained yet.** Next: implement the LightGBM baseline + run first CV.
+- Project fully scaffolded: configs, data ingestion, CV splitter, evaluation, LightGBM wrapper, CV runner all functional.
+- **EDA confirms train = odd months / test = even months globally.** CV splitter rewritten as `LeaveOneMonthOutSplitter` over the 6 odd months.
+- **First baseline trained**: single LightGBM with time features + station-as-categorical. Score below.
+- Original starter notebook preserved at `notebooks/tahmo_starter_notebook.ipynb`.
 
 ### Leaderboard log
 
 | Exp # | Description | CV MBE | CV RMSE | CV combined | LB MBE | LB RMSE | Notes |
 |-------|-------------|--------|---------|-------------|--------|---------|-------|
-| _none yet_ | | | | | | | |
+| exp_001_lgbm_baseline | LightGBM, time features + station categorical, 6-fold LOMO | -1.07 | 100.33 | 50.70 | — | — | per-fold MBE swings ±20, Jan fold worst (RMSE 114.9) |
 
-### What's queued next
+### Feature importance (exp_001)
 
-1. Implement `src/data/load.py` and run `make_dataset.py` to generate interim parquet.
-2. Implement `EvenMonthHoldoutSplitter` and confirm it splits sensibly per station.
-3. Implement LightGBM baseline (`src/models/lgbm.py`), run first CV.
-4. Add solar geometry features (`pvlib`-based) and re-score.
+Top 5 features = 84% of total gain. Hour-of-day (`hour_cos`, `hour`, `hour_sin`) alone is ~75%. `temperature` (#3), `station` (#4), `latitude`/`longitude` follow. **`month` and cyclical month features are weak** — the model is correctly distrustful of features that take values it has never seen in train. This is a strong signal that solar-geometry features (zenith angle, theoretical clearsky GHI) should improve scores substantially.
+
+### What's queued next (priority order)
+
+1. **Solar geometry features via pvlib** — solar zenith, azimuth, clearsky GHI, day_length, is_daylight. Expected biggest single jump because hour-of-day is currently doing all this work implicitly.
+2. **Weather lag/rolling features** — humidity and temperature lags within station-day.
+3. **XGBoost and CatBoost** for model diversity, then ensemble.
+4. **MBE-vs-RMSE column investigation** — bias-corrected prediction in `TargetMBE`?
+5. Run on test → first leaderboard submission.
 
 ### Decisions made
 
-- **Global single-model first**, with `station` as categorical — not per-station models like the starter. Easier to validate, more signal per fit.
-- **LightGBM as primary** — handles categoricals natively, fast, robust.
-- **Parquet for interim/processed data** — speed and storage win.
+- **Single global LightGBM**, with `station` as categorical — not per-station models. Easier to validate, more signal per fit.
+- **LightGBM 4.6.0** as primary. Categorical feature names sanitized to remove special chars via `sanitize_column_name` in `src/cv/run_cv.py`.
+- **Parquet for interim/processed data** — 5× faster reads than CSV.
+- **`clip_max = 1500 W/m²`** based on observed train max 1427.
 
 ### Things to investigate
 
-- Is `Year 1` the first calendar year per station, or 2017 globally? Check via `ID` parsing.
-- Distribution of even-month coverage per station in train (is it uniform?).
+- Per-station score breakdown (`experiments/exp_001_lgbm_baseline/per_station_score.csv`) — are some stations systematically worse? They may need station-specific bias correction.
 - Whether `TargetMBE` and `TargetRMSE` accept different predictions for leaderboard advantage.
+- TA00118 has minimal January data — does it have a unique failure mode in CV?
 
 ---
 

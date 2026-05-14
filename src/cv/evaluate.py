@@ -66,7 +66,8 @@ def evaluate(
                         g["y_true"].values, g["y_pred"].values,
                         mbe_weight, rmse_weight,
                     ),
-                })
+                }),
+                include_groups=False,
             )
             .reset_index()
         )
