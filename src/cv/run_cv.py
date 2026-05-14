@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 
 import numpy as np
@@ -17,58 +16,11 @@ import pandas as pd
 
 from src.cv.evaluate import evaluate
 from src.cv.splitters import make_splitter
-from src.features.time_features import add_time_features
+from src.features.build_features import build_feature_matrix
 from src.models.lgbm import LightGBMRegressor
 from src.utils.io import load_config, read_parquet, resolve_path, write_parquet
 from src.utils.logging import setup_logger
 from src.utils.seed import set_seed
-
-
-_BAD_CHARS = re.compile(r"[^0-9a-zA-Z_]")
-
-
-def sanitize_column_name(name: str) -> str:
-    """LightGBM rejects JSON-special chars in feature names. Normalize once."""
-    cleaned = _BAD_CHARS.sub("_", name)
-    return re.sub(r"_+", "_", cleaned).strip("_")
-
-
-def build_feature_matrix(
-    df: pd.DataFrame,
-    cfg: dict,
-    fcfg: dict,
-) -> tuple[pd.DataFrame, list[str]]:
-    """Return (X, categorical_feature_names) for modeling."""
-    ts_col = cfg["columns"]["timestamp"]
-    station_col = cfg["columns"]["station"]
-    target_col = cfg["columns"]["target"]
-
-    out = df.copy()
-    if fcfg["time"]["enabled"]:
-        out = add_time_features(
-            out, ts_col,
-            include_raw=fcfg["time"]["include_raw"],
-            cyclical=fcfg["time"]["cyclical"],
-        )
-
-    drop_cols = {
-        cfg["columns"]["id"], ts_col, target_col,
-        cfg["columns"]["station_name"], cfg["columns"]["country"],
-    }
-    feature_cols = [c for c in out.columns if c not in drop_cols]
-
-    cat_features: list[str] = []
-    if fcfg.get("station_features", {}).get("station_categorical", True):
-        out[station_col] = out[station_col].astype("category")
-        cat_features.append(station_col)
-    else:
-        feature_cols = [c for c in feature_cols if c != station_col]
-
-    X = out[feature_cols].copy()
-    rename = {c: sanitize_column_name(c) for c in X.columns}
-    X = X.rename(columns=rename)
-    cat_features = [rename[c] for c in cat_features]
-    return X, cat_features
 
 
 def build_model(model_cfg: dict):
@@ -105,7 +57,7 @@ def main(config_path: str, features_path: str, model_path: str, experiment: str)
     station_col = cfg["columns"]["station"]
 
     log.info("Building feature matrix...")
-    X, cat_features = build_feature_matrix(train, cfg, fcfg)
+    X, cat_features, _ = build_feature_matrix(train, cfg, fcfg)
     y = train[target_col].to_numpy()
     ids = train[id_col].to_numpy()
     stations = train[station_col].to_numpy()
