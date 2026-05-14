@@ -43,14 +43,15 @@ All raw competition files live in `data/raw/` (gitignored — too large).
 
 ## 3. Metric
 
-The competition computes **MBE** (Mean Bias Error) and **RMSE** between predicted and hidden observed radiation:
+The competition (per Zindi page, confirmed 2026-05-14) computes:
 
-- `MBE = mean(y_pred - y_true)` — signed; positive = overprediction
-- `RMSE = sqrt(mean((y_pred - y_true)^2))`
+- **|MBE|** = `|mean(y_pred - y_true)|` — absolute, not signed.
+- **RMSE** = `sqrt(mean((y_pred - y_true)^2))`.
+- **LB score = 0.5 * |MBE| + 0.5 * RMSE** (this is `combined_score` in `src/cv/evaluate.py`).
 
-The submission file has two columns (`TargetMBE`, `TargetRMSE`). The baseline puts the same prediction in both — investigate whether a bias-adjusted prediction in `TargetMBE` and the raw prediction in `TargetRMSE` improves leaderboard score.
+**Submission format requirement**: 3 columns `ID, TargetMBE, TargetRMSE` with **identical values in TargetMBE and TargetRMSE per row**. Putting different values in the two columns is not allowed — the MBE-vs-RMSE column investigation is closed.
 
-Our combined CV score: see `src/cv/evaluate.py`.
+**LB vs CV scale**: Zindi normalizes the LB score (e.g., baseline CV combined 50.70 in W/m² maps to LB 0.099). Normalization is undocumented but constant, so relative improvements in CV should track relative improvements on LB.
 
 ---
 
@@ -129,9 +130,9 @@ python -m src.submit --config config/config.yaml
 
 ### Leaderboard log
 
-| Exp # | Description | CV MBE | CV RMSE | CV combined | LB MBE | LB RMSE | Notes |
-|-------|-------------|--------|---------|-------------|--------|---------|-------|
-| exp_001_lgbm_baseline | LightGBM, time features + station categorical, 6-fold LOMO | -1.07 | 100.33 | 50.70 | — | — | per-fold MBE swings ±20, Jan fold worst (RMSE 114.9) |
+| Exp # | Description | CV \|MBE\| | CV RMSE | CV combined | LB (public) | Notes |
+|-------|-------------|--------|---------|-------------|-------------|-------|
+| exp_001_lgbm_baseline | LightGBM, time features + station categorical, 6-fold LOMO | 1.07 | 100.33 | 50.70 | **0.099254** | per-fold MBE swings ±20, Jan fold worst (RMSE 114.9); LB-vs-CV scale factor ≈ 0.00196 |
 
 ### Feature importance (exp_001)
 
@@ -141,9 +142,11 @@ Top 5 features = 84% of total gain. Hour-of-day (`hour_cos`, `hour`, `hour_sin`)
 
 1. **Solar geometry features via pvlib** — solar zenith, azimuth, clearsky GHI, day_length, is_daylight. Expected biggest single jump because hour-of-day is currently doing all this work implicitly.
 2. **Weather lag/rolling features** — humidity and temperature lags within station-day.
-3. **XGBoost and CatBoost** for model diversity, then ensemble.
-4. **MBE-vs-RMSE column investigation** — bias-corrected prediction in `TargetMBE`?
-5. Run on test → first leaderboard submission.
+3. **Per-station bias correction** — per-station mean residual subtraction; targets the |MBE| half of the score directly.
+4. **XGBoost and CatBoost** for model diversity, then ensemble.
+5. **LightGBM hyperparameter tuning** — last lever once features and ensemble are exhausted.
+
+(MBE-vs-RMSE column trick is removed — Zindi mandates identical values per row.)
 
 ### Decisions made
 
