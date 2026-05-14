@@ -1,0 +1,9 @@
+{
+  "strategy": "group_kfold_by_year",
+  "primary": false,
+  "n": 642175,
+  "mbe_signed": -8.33372234504249,
+  "abs_mbe": 8.33372234504249,
+  "rmse": 146.9404716627515,
+  "combined": 77.637097003897
+}

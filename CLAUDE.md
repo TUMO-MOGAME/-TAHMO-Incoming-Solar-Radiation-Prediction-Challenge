@@ -59,13 +59,27 @@ The competition (per Zindi page, confirmed 2026-05-14) computes:
 
 The test set is the **even months** while train is the **odd months** of every year. Train has zero data in months 2, 4, 6, 8, 10, 12 — so we cannot hold out even months. Instead, we simulate the "predict an unseen month" challenge by leave-one-month-out over the 6 odd months.
 
-**Primary CV** (`src/cv/splitters.py: LeaveOneMonthOutSplitter`):
-6 folds. For each fold, hold out one odd month from train, fit on the other five, score MBE+RMSE on the held-out month. Each fold's validation is the closest analogue to the test challenge we can build from train alone.
+Every experiment runs **three** CV strategies and produces `cv_dashboard.{json,txt}` for triangulation. Implementations in `src/cv/splitters.py`.
 
-**Secondary CV** (`src/cv/splitters.py: TimeForwardSplitter`):
-Per-station forward-walking time splits — sanity check for temporal leakage.
+| # | Strategy | Role | What it tells us |
+|---|----------|------|------------------|
+| 1 | **LeaveOneMonthOutSplitter** | PRIMARY (decisions) | Direct simulation of the test task: predict an unseen month from the other 5 odd months. 6 folds. |
+| 2 | **GroupKFoldByYearSplitter** | Sanity check | Hold out one calendar year. 5 folds (2016-2020). Catches over-fit to 2018 (68% of train rows). |
+| 3 | **TimeForwardSplitter** | Sanity check | Per-station forward walk. If this scores better than primary, a feature is leaking future info. |
 
-**Never** use random K-fold over rows — radiation is highly autocorrelated within a station-day; random splits leak future into the past.
+**Interpretation rules** (auto-computed in `cv_dashboard.txt`, lower combined = better):
+
+- All three should move down together as features improve → trustworthy improvement.
+- **TimeForward < 0.85 × Primary** → 🚩 feature leakage; some signal is from the future.
+- **GroupKFoldByYear > 1.20 × Primary** → 🚩 year-overfit; model leans too hard on year-specific patterns. Consider dropping the `year` feature, sample-weighting under-represented years, or stronger regularization.
+- One strategy moves but the others don't → suspicious, investigate before celebrating.
+
+**Strategies we deliberately do NOT use** (would mislead on this data):
+
+- Random `KFold` — radiation is autocorrelated within a station-day at 15-min lag, so random splits leak across consecutive rows and produce wildly optimistic scores.
+- `StratifiedKFold` — classification tool; our challenge is temporal generalization, not class imbalance.
+- `GroupKFold` by station — all 40 stations are in BOTH train and test; holding out stations tests the wrong question.
+- `StratifiedGroupKFold` — every station appears in every month, so there's no useful axis to stratify on.
 
 ---
 
@@ -130,9 +144,9 @@ python -m src.submit --config config/config.yaml
 
 ### Leaderboard log
 
-| Exp # | Description | CV \|MBE\| | CV RMSE | CV combined | LB (public) | Notes |
+| Exp # | Description | LOMO combined (PRIMARY) | GroupKFoldByYear combined | TimeForward combined | LB (public) | Notes |
 |-------|-------------|--------|---------|-------------|-------------|-------|
-| exp_001_lgbm_baseline | LightGBM, time features + station categorical, 6-fold LOMO | 1.07 | 100.33 | 50.70 | **0.099254** | per-fold MBE swings ±20, Jan fold worst (RMSE 114.9); LB-vs-CV scale factor ≈ 0.00196 |
+| exp_001_lgbm_baseline | LightGBM, time features + station categorical | **50.70** (\|MBE\|=1.07, RMSE=100.33) | 77.64 (ratio 1.53 — 🚩 year overfit) | 50.57 (ratio 1.00 — no leakage ✓) | **0.099254** | LB-vs-CV scale ≈ 0.00196; year-overfit flag is the open diagnostic |
 
 ### Feature importance (exp_001)
 
@@ -155,8 +169,8 @@ Top 5 features = 84% of total gain. Hour-of-day (`hour_cos`, `hour`, `hour_sin`)
 
 ### Things to investigate
 
+- **Year-overfit flag** (GroupKFoldByYear ratio 1.53 in exp_001): the baseline leans on year-specific patterns. Worst single-year fold was 2016 (combined 143.1). Candidates: drop the raw `year` feature, sample-weight under-represented years (2016/2019/2020), or stronger regularization. Check whether solar geometry features close this gap before adding mitigations — physics features are year-invariant by construction.
 - Per-station score breakdown (`experiments/exp_001_lgbm_baseline/per_station_score.csv`) — are some stations systematically worse? They may need station-specific bias correction.
-- Whether `TargetMBE` and `TargetRMSE` accept different predictions for leaderboard advantage.
 - TA00118 has minimal January data — does it have a unique failure mode in CV?
 
 ---

@@ -1,4 +1,14 @@
-"""Full CV loop: features -> per-fold fit -> evaluate -> save artifacts.
+"""Full CV loop: run every configured strategy, emit a dashboard.
+
+The PRIMARY strategy (first in `cv.strategies`) is what drives decisions:
+its fold_scores.csv, OOF predictions, feature importances, and per-station
+breakdown sit at the top level of the experiment directory so train.py
+and downstream code keep finding them where they expect.
+
+Secondary strategies (sanity checks) write only their fold_scores and
+overall_score under `secondary/<strategy_name>/`.
+
+Both get summarised side-by-side in `cv_dashboard.{json,txt}`.
 
 Usage:
     python -m src.cv.run_cv --config config/config.yaml \
@@ -15,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from src.cv.evaluate import evaluate
-from src.cv.splitters import make_splitter
+from src.cv.splitters import make_splitters
 from src.features.build_features import build_feature_matrix
 from src.models.lgbm import LightGBMRegressor
 from src.utils.io import load_config, read_parquet, resolve_path, write_parquet
@@ -30,6 +40,157 @@ def build_model(model_cfg: dict):
     raise NotImplementedError(f"Model '{active}' not yet wired into run_cv.py")
 
 
+def _run_one_strategy(
+    *,
+    strategy_name: str,
+    splitter,
+    is_primary: bool,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    ids: np.ndarray,
+    stations: np.ndarray,
+    cat_features: list[str],
+    train_df: pd.DataFrame,
+    cfg: dict,
+    mcfg: dict,
+    strategy_dir,
+    log,
+) -> dict:
+    """Run one full CV strategy. Returns a dashboard row dict."""
+    clip_min = cfg["evaluation"]["clip_min"]
+    clip_max = cfg["evaluation"]["clip_max"]
+    mbe_w = cfg["evaluation"]["mbe_weight"]
+    rmse_w = cfg["evaluation"]["rmse_weight"]
+    id_col = cfg["columns"]["id"]
+    station_col = cfg["columns"]["station"]
+
+    strategy_dir.mkdir(parents=True, exist_ok=True)
+
+    oof_pred = np.full(len(y), np.nan, dtype=float)
+    fold_scores: list[dict] = []
+
+    for fold in splitter.split(train_df):
+        log.info(
+            "[%s] Fold %d (%s): train=%d valid=%d",
+            strategy_name, fold.fold_id, fold.description,
+            len(fold.train_idx), len(fold.valid_idx),
+        )
+        X_tr = X.iloc[fold.train_idx]
+        y_tr = y[fold.train_idx]
+        X_va = X.iloc[fold.valid_idx]
+        y_va = y[fold.valid_idx]
+
+        model = build_model(mcfg)
+        model.fit(X_tr, y_tr, X_va, y_va, categorical_features=cat_features)
+        preds = np.clip(model.predict(X_va), clip_min, clip_max)
+        oof_pred[fold.valid_idx] = preds
+
+        report = evaluate(
+            y_va, preds, stations=stations[fold.valid_idx],
+            mbe_weight=mbe_w, rmse_weight=rmse_w,
+        )
+        log.info(
+            "[%s] Fold %d: |MBE|=%.3f RMSE=%.3f combined=%.3f best_iter=%s",
+            strategy_name, fold.fold_id, report.abs_mbe, report.rmse, report.combined,
+            getattr(model, "best_iteration_", None),
+        )
+        fold_scores.append({
+            "fold": fold.fold_id,
+            "description": fold.description,
+            "n_train": int(len(fold.train_idx)),
+            "n_valid": int(len(fold.valid_idx)),
+            "mbe": report.mbe,
+            "abs_mbe": report.abs_mbe,
+            "rmse": report.rmse,
+            "combined": report.combined,
+            "best_iteration": int(model.best_iteration_) if model.best_iteration_ else None,
+        })
+
+        if is_primary and hasattr(model, "feature_importance"):
+            fi = model.feature_importance("gain")
+            fi.to_csv(strategy_dir / f"feature_importance_fold_{fold.fold_id}.csv", index=False)
+
+    pd.DataFrame(fold_scores).to_csv(strategy_dir / "fold_scores.csv", index=False)
+
+    valid_mask = ~np.isnan(oof_pred)
+    overall = evaluate(
+        y[valid_mask], oof_pred[valid_mask],
+        stations=stations[valid_mask], mbe_weight=mbe_w, rmse_weight=rmse_w,
+    )
+    log.info(
+        "[%s] OOF overall: n=%d |MBE|=%.4f RMSE=%.4f combined=%.4f",
+        strategy_name, overall.n, overall.abs_mbe, overall.rmse, overall.combined,
+    )
+
+    overall_summary = {
+        "strategy": strategy_name,
+        "primary": bool(is_primary),
+        "n": int(overall.n),
+        "mbe_signed": float(overall.mbe),
+        "abs_mbe": float(overall.abs_mbe),
+        "rmse": float(overall.rmse),
+        "combined": float(overall.combined),
+    }
+    with open(strategy_dir / "overall_score.json", "w") as f:
+        json.dump(overall_summary, f, indent=2)
+
+    if is_primary:
+        oof_df = pd.DataFrame({
+            id_col: ids[valid_mask],
+            "y_true": y[valid_mask],
+            "y_pred": oof_pred[valid_mask],
+            station_col: stations[valid_mask],
+        })
+        oof_dir = strategy_dir / "oof"
+        oof_dir.mkdir(parents=True, exist_ok=True)
+        write_parquet(oof_df, str(oof_dir / "oof_predictions.parquet"))
+        if overall.per_station is not None:
+            overall.per_station.to_csv(strategy_dir / "per_station_score.csv", index=False)
+
+    return {
+        "strategy": strategy_name,
+        "primary": bool(is_primary),
+        "n_folds": len(fold_scores),
+        "n": int(overall.n),
+        "abs_mbe": float(overall.abs_mbe),
+        "rmse": float(overall.rmse),
+        "combined": float(overall.combined),
+    }
+
+
+def _format_dashboard(dashboard: list[dict]) -> str:
+    """Pretty-printed dashboard table."""
+    header = f"{'Strategy':<24} {'Folds':>5} {'N':>10} {'|MBE|':>8} {'RMSE':>8} {'Combined':>9}"
+    sep = "-" * len(header)
+    lines = [header, sep]
+    primary = next((r for r in dashboard if r["primary"]), None)
+    primary_combined = primary["combined"] if primary else None
+
+    for row in dashboard:
+        marker = " [P]" if row["primary"] else ""
+        lines.append(
+            f"{row['strategy'] + marker:<24} {row['n_folds']:>5d} {row['n']:>10d} "
+            f"{row['abs_mbe']:>8.3f} {row['rmse']:>8.3f} {row['combined']:>9.3f}"
+        )
+
+    if primary_combined and primary_combined > 0:
+        lines.append("")
+        lines.append("Interpretation rules (lower = better):")
+        lines.append(f"  Primary (decisions): {primary['strategy']} -> combined = {primary_combined:.3f}")
+        for row in dashboard:
+            if row["primary"]:
+                continue
+            ratio = row["combined"] / primary_combined
+            if ratio < 0.85:
+                tag = "FLAG: scores much better than primary -> possible feature leakage"
+            elif ratio > 1.20:
+                tag = "FLAG: scores much worse than primary -> possible distribution-shift fragility"
+            else:
+                tag = "OK: roughly tracks primary"
+            lines.append(f"  {row['strategy']:<24} ratio={ratio:.2f}  {tag}")
+    return "\n".join(lines)
+
+
 def main(config_path: str, features_path: str, model_path: str, experiment: str) -> None:
     log = setup_logger()
     cfg = load_config(config_path)
@@ -38,8 +199,7 @@ def main(config_path: str, features_path: str, model_path: str, experiment: str)
     set_seed(cfg["project"]["seed"])
 
     exp_dir = resolve_path(cfg["paths"]["experiments_dir"]) / experiment
-    (exp_dir / "oof").mkdir(parents=True, exist_ok=True)
-
+    exp_dir.mkdir(parents=True, exist_ok=True)
     for src_path, dest_name in [
         (config_path, "config.yaml"),
         (features_path, "features.yaml"),
@@ -63,84 +223,35 @@ def main(config_path: str, features_path: str, model_path: str, experiment: str)
     stations = train[station_col].to_numpy()
     log.info("X shape: %s, n_features: %d, categorical: %s", X.shape, X.shape[1], cat_features)
 
-    splitter = make_splitter(cfg)
-    log.info("Splitter: %s", type(splitter).__name__)
+    splitters = make_splitters(cfg)
+    log.info("Strategies: %s (primary=%s)", [n for n, _ in splitters], splitters[0][0])
 
-    clip_min = cfg["evaluation"]["clip_min"]
-    clip_max = cfg["evaluation"]["clip_max"]
-    mbe_w = cfg["evaluation"]["mbe_weight"]
-    rmse_w = cfg["evaluation"]["rmse_weight"]
+    dashboard: list[dict] = []
+    for i, (name, splitter) in enumerate(splitters):
+        is_primary = (i == 0)
+        log.info("=" * 70)
+        log.info("Running strategy: %s (primary=%s)", name, is_primary)
+        log.info("=" * 70)
 
-    oof_pred = np.full(len(y), np.nan, dtype=float)
-    fold_scores: list[dict] = []
+        strategy_dir = exp_dir if is_primary else (exp_dir / "secondary" / name)
+        row = _run_one_strategy(
+            strategy_name=name,
+            splitter=splitter,
+            is_primary=is_primary,
+            X=X, y=y, ids=ids, stations=stations,
+            cat_features=cat_features,
+            train_df=train, cfg=cfg, mcfg=mcfg,
+            strategy_dir=strategy_dir,
+            log=log,
+        )
+        dashboard.append(row)
 
-    for fold in splitter.split(train):
-        log.info("==== Fold %d (%s): train=%d valid=%d ====",
-                 fold.fold_id, fold.description, len(fold.train_idx), len(fold.valid_idx))
-
-        X_tr = X.iloc[fold.train_idx]
-        y_tr = y[fold.train_idx]
-        X_va = X.iloc[fold.valid_idx]
-        y_va = y[fold.valid_idx]
-
-        model = build_model(mcfg)
-        model.fit(X_tr, y_tr, X_va, y_va, categorical_features=cat_features)
-
-        preds = np.clip(model.predict(X_va), clip_min, clip_max)
-        oof_pred[fold.valid_idx] = preds
-
-        report = evaluate(y_va, preds, stations=stations[fold.valid_idx], mbe_weight=mbe_w, rmse_weight=rmse_w)
-        log.info("Fold %d: n=%d MBE=%.3f RMSE=%.3f combined=%.3f best_iter=%s",
-                 fold.fold_id, report.n, report.mbe, report.rmse, report.combined,
-                 getattr(model, "best_iteration_", None))
-        fold_scores.append({
-            "fold": fold.fold_id,
-            "description": fold.description,
-            "n_train": int(len(fold.train_idx)),
-            "n_valid": int(len(fold.valid_idx)),
-            "mbe": report.mbe,
-            "rmse": report.rmse,
-            "combined": report.combined,
-            "best_iteration": int(model.best_iteration_) if model.best_iteration_ else None,
-        })
-
-        if hasattr(model, "feature_importance"):
-            fi = model.feature_importance("gain")
-            fi.to_csv(exp_dir / f"feature_importance_fold_{fold.fold_id}.csv", index=False)
-
-    valid_mask = ~np.isnan(oof_pred)
-    overall = evaluate(y[valid_mask], oof_pred[valid_mask],
-                       stations=stations[valid_mask], mbe_weight=mbe_w, rmse_weight=rmse_w)
-
-    log.info("==== OOF overall: n=%d MBE=%.4f RMSE=%.4f combined=%.4f ====",
-             overall.n, overall.mbe, overall.rmse, overall.combined)
-
-    pd.DataFrame(fold_scores).to_csv(exp_dir / "fold_scores.csv", index=False)
-    overall_summary = {
-        "n": int(overall.n),
-        "mbe": float(overall.mbe),
-        "abs_mbe": float(overall.abs_mbe),
-        "rmse": float(overall.rmse),
-        "combined": float(overall.combined),
-        "splitter": type(splitter).__name__,
-        "n_features": int(X.shape[1]),
-        "feature_names": list(X.columns),
-        "categorical_features": cat_features,
-    }
-    with open(exp_dir / "overall_score.json", "w") as f:
-        json.dump(overall_summary, f, indent=2)
-
-    oof_df = pd.DataFrame({
-        id_col: ids[valid_mask],
-        "y_true": y[valid_mask],
-        "y_pred": oof_pred[valid_mask],
-        station_col: stations[valid_mask],
-    })
-    write_parquet(oof_df, str(exp_dir / "oof" / "oof_predictions.parquet"))
-
-    if overall.per_station is not None:
-        overall.per_station.to_csv(exp_dir / "per_station_score.csv", index=False)
-
+    with open(exp_dir / "cv_dashboard.json", "w") as f:
+        json.dump(dashboard, f, indent=2)
+    text = _format_dashboard(dashboard)
+    with open(exp_dir / "cv_dashboard.txt", "w") as f:
+        f.write(text + "\n")
+    log.info("\n%s", text)
     log.info("Wrote artifacts to %s", exp_dir)
 
 

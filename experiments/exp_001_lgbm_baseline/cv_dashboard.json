@@ -1,0 +1,29 @@
+[
+  {
+    "strategy": "leave_one_month_out",
+    "primary": true,
+    "n_folds": 6,
+    "n": 642175,
+    "abs_mbe": 1.073898892403164,
+    "rmse": 100.32830977213862,
+    "combined": 50.701104332270894
+  },
+  {
+    "strategy": "group_kfold_by_year",
+    "primary": false,
+    "n_folds": 5,
+    "n": 642175,
+    "abs_mbe": 8.33372234504249,
+    "rmse": 146.9404716627515,
+    "combined": 77.637097003897
+  },
+  {
+    "strategy": "time_forward",
+    "primary": false,
+    "n_folds": 4,
+    "n": 513725,
+    "abs_mbe": 1.8365006383161417,
+    "rmse": 99.3104127213352,
+    "combined": 50.57345667982567
+  }
+]

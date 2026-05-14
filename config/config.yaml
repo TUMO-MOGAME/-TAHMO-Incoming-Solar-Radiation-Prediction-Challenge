@@ -41,11 +41,15 @@ columns:
     - TargetRMSE
 
 cv:
-  splitter: leave_one_month_out   # one of: leave_one_month_out, time_forward
-  # Train contains only odd months; test contains only even months.
-  # Leave-one-out over the 6 odd months is the closest simulation of test.
+  # First strategy is PRIMARY — used for decisions, train.py reads its
+  # best_iteration, and OOF predictions are saved for it. The rest are
+  # sanity checks reported in cv_dashboard.json.
+  strategies:
+    - leave_one_month_out     # primary — mimics test (predict unseen months)
+    - group_kfold_by_year     # sanity — catches over-fit to 2018 (68% of train)
+    - time_forward            # sanity — catches future-info feature leakage
   train_months: [1, 3, 5, 7, 9, 11]
-  n_folds: 6                       # one fold per held-out month
+  n_folds_time_forward: 4
   per_station_score: true
 
 evaluation:
