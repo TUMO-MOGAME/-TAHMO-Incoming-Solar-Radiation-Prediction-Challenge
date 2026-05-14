@@ -1,0 +1,77 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Environments
+.env
+.env.local
+
+# OS
+Thumbs.db
+
+# Data — raw and intermediate (large, regenerable from raw)
+data/raw/*.csv
+data/raw/*.parquet
+data/interim/*
+data/processed/*
+data/external/*
+!data/raw/dataset_data_dictionary.csv
+!data/**/.gitkeep
+
+# Models — large binaries, regenerable
+models/*.pkl
+models/*.cbm
+models/*.joblib
+models/*.txt
+models/*.json
+models/*.bin
+!models/.gitkeep
+
+# Experiment artifacts
+experiments/*/predictions/
+experiments/*/oof/
+experiments/*/checkpoints/
+
+# Submissions — keep the file list versioned but not necessarily large CSVs
+submissions/*.csv
+!submissions/.gitkeep
+
+# Reports
+reports/figures/*.png
+reports/figures/*.jpg
+!reports/figures/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# Coverage / testing
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,60 @@
+# Active model + hyperparameters. Switch `active` to use a different model.
+
+active: lightgbm
+
+lightgbm:
+  params:
+    objective: regression
+    metric: rmse
+    learning_rate: 0.05
+    num_leaves: 127
+    max_depth: -1
+    min_data_in_leaf: 50
+    feature_fraction: 0.8
+    bagging_fraction: 0.8
+    bagging_freq: 5
+    lambda_l2: 1.0
+    verbose: -1
+    n_jobs: -1
+  training:
+    num_boost_round: 5000
+    early_stopping_rounds: 200
+    log_evaluation: 200
+
+xgboost:
+  params:
+    objective: reg:squarederror
+    eval_metric: rmse
+    learning_rate: 0.05
+    max_depth: 8
+    min_child_weight: 5
+    subsample: 0.8
+    colsample_bytree: 0.8
+    reg_lambda: 1.0
+    tree_method: hist
+    n_jobs: -1
+  training:
+    num_boost_round: 5000
+    early_stopping_rounds: 200
+
+catboost:
+  params:
+    loss_function: RMSE
+    learning_rate: 0.05
+    depth: 8
+    l2_leaf_reg: 3.0
+    bagging_temperature: 1.0
+    od_type: Iter
+    od_wait: 200
+    verbose: 200
+  training:
+    iterations: 5000
+
+random_forest:
+  # Kept for fast smoke-test runs and notebook reproduction
+  params:
+    n_estimators: 300
+    max_depth: 10
+    min_samples_leaf: 5
+    n_jobs: -1
+    random_state: 42

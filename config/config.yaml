@@ -1,0 +1,57 @@
+# Central project configuration. Paths are relative to the project root.
+
+project:
+  name: tahmo-solar-radiation
+  seed: 42
+
+paths:
+  raw_dir: data/raw
+  interim_dir: data/interim
+  processed_dir: data/processed
+  external_dir: data/external
+  experiments_dir: experiments
+  models_dir: models
+  submissions_dir: submissions
+  reports_dir: reports
+  train_raw: data/raw/Train.csv
+  test_raw: data/raw/Test.csv
+  sample_submission_raw: data/raw/SampleSubmission.csv
+  train_interim: data/interim/train.parquet
+  test_interim: data/interim/test.parquet
+  sample_submission_interim: data/interim/sample_submission.parquet
+
+columns:
+  id: ID
+  timestamp: timestamp
+  station: station
+  station_name: station_name
+  country: country
+  target: "radiation (W/m2)"
+  weather:
+    - "precipitation (mm)"
+    - "relativehumidity (-)"
+    - "temperature (degrees Celsius)"
+  station_meta:
+    - installation_height
+    - elevation
+    - latitude
+    - longitude
+  submission_targets:
+    - TargetMBE
+    - TargetRMSE
+
+cv:
+  splitter: even_month_holdout    # one of: even_month_holdout, time_forward
+  n_folds: 5
+  # For even_month_holdout: which even months to rotate across folds
+  even_months: [2, 4, 6, 8, 10, 12]
+  # Whether to score per-station and aggregate, or pool all stations
+  per_station_score: true
+
+evaluation:
+  # Combined score weights — placeholder until competition page is confirmed
+  mbe_weight: 0.5
+  rmse_weight: 0.5
+  # Clip predictions to physical bounds before scoring + submitting
+  clip_min: 0.0
+  clip_max: 1400.0   # ~max plausible W/m² near equator at noon
