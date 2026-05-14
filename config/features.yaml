@@ -6,13 +6,11 @@ time:
   cyclical: [hour, month, day_of_year]
 
 solar_geometry:
-  enabled: false   # turn on once src/features/solar_geometry.py is implemented
-  features:
-    - solar_zenith
-    - solar_azimuth
-    - day_length
-    - clearsky_ghi
-    - is_daylight
+  enabled: true
+  # Computed per-station via pvlib. Cached to data/processed/{train,test}_solar.parquet.
+  # Columns added:
+  #   solar_zenith, solar_elevation, cos_zenith,
+  #   clearsky_ghi, clearsky_dni, clearsky_dhi, is_daylight
 
 weather_lags:
   enabled: false

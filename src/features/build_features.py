@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import argparse
 import re
+from pathlib import Path
 
 import pandas as pd
 
+from src.features.solar_geometry import SOLAR_FEATURE_COLS, add_solar_geometry_features
 from src.features.time_features import add_time_features
-from src.utils.io import load_config, read_parquet, write_parquet
+from src.utils.io import load_config, read_parquet, resolve_path, write_parquet
 from src.utils.logging import setup_logger
 
 _BAD_CHARS = re.compile(r"[^0-9a-zA-Z_]")
+_logger = setup_logger()
 
 
 def sanitize_column_name(name: str) -> str:
@@ -24,17 +27,67 @@ def sanitize_column_name(name: str) -> str:
     return re.sub(r"_+", "_", cleaned).strip("_")
 
 
+def _solar_cache_path(cfg: dict, source_path: str) -> Path:
+    """Deterministic cache path for solar features keyed by the source parquet."""
+    src = resolve_path(source_path)
+    stem = src.stem  # e.g. "train" or "test"
+    return resolve_path(cfg["paths"]["processed_dir"]) / f"{stem}_solar.parquet"
+
+
+def _attach_solar_features(
+    df: pd.DataFrame,
+    cfg: dict,
+    source_path: str | None,
+) -> pd.DataFrame:
+    """Return df with solar feature columns attached. Cached to processed/ on disk.
+
+    Cache key is keyed off the source parquet stem. If the source parquet is
+    unknown (no `source_path`), we recompute every call.
+    """
+    if all(c in df.columns for c in SOLAR_FEATURE_COLS):
+        _logger.info("Solar features already present, skipping recompute")
+        return df
+
+    if source_path is not None:
+        cache_path = _solar_cache_path(cfg, source_path)
+        if cache_path.exists():
+            _logger.info("Loading cached solar features: %s", cache_path)
+            cached = pd.read_parquet(cache_path)
+            id_col = cfg["columns"]["id"]
+            merged = df.merge(cached[[id_col, *SOLAR_FEATURE_COLS]], on=id_col, how="left")
+            if merged[SOLAR_FEATURE_COLS].isna().any().any():
+                _logger.warning("Cache had NaNs after merge — recomputing")
+            else:
+                return merged
+
+    _logger.info("Computing solar features over %d rows...", len(df))
+    out = add_solar_geometry_features(df, timestamp_col=cfg["columns"]["timestamp"])
+
+    if source_path is not None:
+        cache_path = _solar_cache_path(cfg, source_path)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        id_col = cfg["columns"]["id"]
+        out[[id_col, *SOLAR_FEATURE_COLS]].to_parquet(cache_path, index=False)
+        _logger.info("Cached solar features: %s", cache_path)
+
+    return out
+
+
 def build_feature_matrix(
     df: pd.DataFrame,
     cfg: dict,
     fcfg: dict,
     station_categories: list[str] | None = None,
+    source_path: str | None = None,
 ) -> tuple[pd.DataFrame, list[str], list[str]]:
     """Return (X, categorical_feature_names, station_categories).
 
     `station_categories`: if provided, the station column is converted to
     pandas Categorical with these exact categories — guarantees train/test
     consistency. If None, categories are inferred from df.
+
+    `source_path`: optional path to the interim parquet `df` came from.
+    Used as a cache key for the (expensive) solar geometry features.
     """
     ts_col = cfg["columns"]["timestamp"]
     station_col = cfg["columns"]["station"]
@@ -47,6 +100,9 @@ def build_feature_matrix(
             include_raw=fcfg["time"]["include_raw"],
             cyclical=fcfg["time"]["cyclical"],
         )
+
+    if fcfg.get("solar_geometry", {}).get("enabled", False):
+        out = _attach_solar_features(out, cfg, source_path)
 
     drop_cols = {
         cfg["columns"]["id"], ts_col, target_col,

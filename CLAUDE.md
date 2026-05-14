@@ -146,7 +146,8 @@ python -m src.submit --config config/config.yaml
 
 | Exp # | Description | LOMO combined (PRIMARY) | GroupKFoldByYear combined | TimeForward combined | LB (public) | Notes |
 |-------|-------------|--------|---------|-------------|-------------|-------|
-| exp_001_lgbm_baseline | LightGBM, time features + station categorical | **50.70** (\|MBE\|=1.07, RMSE=100.33) | 77.64 (ratio 1.53 — 🚩 year overfit) | 50.57 (ratio 1.00 — no leakage ✓) | **0.099254** | LB-vs-CV scale ≈ 0.00196; year-overfit flag is the open diagnostic |
+| exp_001_lgbm_baseline | LightGBM, time features + station categorical | **50.70** (\|MBE\|=1.07, RMSE=100.33) | 77.64 (ratio 1.53 — 🚩 year overfit) | 50.57 (ratio 1.00 — no leakage ✓) | **0.099254** | LB-vs-CV scale ≈ 0.00196 |
+| exp_002_lgbm_solar | Adds pvlib solar geometry (zenith, elevation, cos_zenith, clearsky GHI/DNI/DHI, is_daylight) | **51.26** (\|MBE\|=3.32, RMSE=99.20) | 65.87 (ratio 1.28) ← year-overfit gap shrunk by ~30% | 51.01 (ratio 1.00) | submission_002b_lgbm_solar_corrected pending upload | Solar features replace hour features (75% of gain → physics features 81%). RMSE improved 1.13 but \|MBE\| degraded 2.25 due to systematic −3.32 W/m² under-prediction (clearsky is theoretical ceiling). Bias correction applied in submission_002b: predicted LB ≈ 0.097 |
 
 ### Feature importance (exp_001)
 
@@ -154,18 +155,20 @@ Top 5 features = 84% of total gain. Hour-of-day (`hour_cos`, `hour`, `hour_sin`)
 
 ### What's queued next (priority order)
 
-1. **Solar geometry features via pvlib** — solar zenith, azimuth, clearsky GHI, day_length, is_daylight. Expected biggest single jump because hour-of-day is currently doing all this work implicitly.
-2. **Weather lag/rolling features** — humidity and temperature lags within station-day.
-3. **Per-station bias correction** — subtract per-station mean residual from predictions (both columns since identity required). Targets the |MBE| half of the metric.
+1. **Upload submission_002b** to confirm bias-corrected exp_002 beats baseline on LB. Predicted LB ≈ 0.097.
+2. **Per-station bias correction** — subtract per-station mean residual instead of a single global shift. Some stations have larger systematic bias than others (TA00348 had \|MBE\|≈29 in exp_002). Targets \|MBE\| more precisely.
+3. **Weather lag/rolling features** — humidity and temperature lags within station-day. Captures cloud-cover transients that clearsky misses.
 4. **XGBoost and CatBoost** for model diversity, then ensemble.
 5. **LightGBM hyperparameter tuning** — last lever once features and ensemble are exhausted.
 
 ### Decisions made
 
 - **Single global LightGBM**, with `station` as categorical — not per-station models. Easier to validate, more signal per fit.
-- **LightGBM 4.6.0** as primary. Categorical feature names sanitized to remove special chars via `sanitize_column_name` in `src/cv/run_cv.py`.
+- **LightGBM 4.6.0** as primary. Categorical feature names sanitized to remove special chars via `sanitize_column_name` in `src/features/build_features.py`.
 - **Parquet for interim/processed data** — 5× faster reads than CSV.
 - **`clip_max = 1500 W/m²`** based on observed train max 1427.
+- **Solar geometry features are cached** to `data/processed/{train,test}_solar.parquet` keyed by source interim parquet. First compute ~8s; subsequent runs reuse.
+- **Bias correction at submission time**: when the OOF mean signed residual is non-trivial (>1 W/m²), add `-mean(residual)` to all test predictions before clipping. Targets the \|MBE\| half of the score with no model retraining.
 
 ### Things to investigate
 

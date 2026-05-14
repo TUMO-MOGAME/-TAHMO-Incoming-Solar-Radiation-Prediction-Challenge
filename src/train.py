@@ -56,7 +56,9 @@ def main(config_path: str, features_path: str, model_path: str, experiment: str)
     y = train[target_col].to_numpy()
 
     log.info("Building feature matrix...")
-    X, cat_features, station_categories = build_feature_matrix(train, cfg, fcfg)
+    X, cat_features, station_categories = build_feature_matrix(
+        train, cfg, fcfg, source_path=cfg["paths"]["train_interim"]
+    )
     log.info("X shape: %s, categorical: %s", X.shape, cat_features)
 
     default_rounds = mcfg["lightgbm"]["training"]["num_boost_round"]

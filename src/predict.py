@@ -46,6 +46,7 @@ def main(config_path: str, features_path: str, experiment: str) -> None:
     X_test, cat_features, _ = build_feature_matrix(
         test, cfg, fcfg,
         station_categories=metadata["station_categories"],
+        source_path=cfg["paths"]["test_interim"],
     )
     X_test = X_test[metadata["feature_names"]]
     if cat_features != metadata["categorical_features"]:

@@ -217,7 +217,9 @@ def main(config_path: str, features_path: str, model_path: str, experiment: str)
     station_col = cfg["columns"]["station"]
 
     log.info("Building feature matrix...")
-    X, cat_features, _ = build_feature_matrix(train, cfg, fcfg)
+    X, cat_features, _ = build_feature_matrix(
+        train, cfg, fcfg, source_path=cfg["paths"]["train_interim"]
+    )
     y = train[target_col].to_numpy()
     ids = train[id_col].to_numpy()
     stations = train[station_col].to_numpy()

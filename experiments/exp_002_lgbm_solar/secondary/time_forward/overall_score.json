@@ -1,0 +1,9 @@
+{
+  "strategy": "time_forward",
+  "primary": false,
+  "n": 513725,
+  "mbe_signed": -2.371191938118684,
+  "abs_mbe": 2.371191938118684,
+  "rmse": 99.6470237863615,
+  "combined": 51.00910786224009
+}
