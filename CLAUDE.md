@@ -41,17 +41,22 @@ All raw competition files live in `data/raw/` (gitignored — too large).
 
 ---
 
-## 3. Metric
+## 3. Metric — Reverse-engineered from 3 submissions (2026-05-14)
 
-The competition (per Zindi page, confirmed 2026-05-14) computes:
+Zindi's docs describe a "weighted mean of MBE and RMSE with 0.5/0.5 weights" but reality is different. By fitting three submission outcomes we get:
 
-- **|MBE|** = `|mean(y_pred - y_true)|` — absolute, not signed.
-- **RMSE** = `sqrt(mean((y_pred - y_true)^2))`.
-- **LB score = 0.5 * |MBE| + 0.5 * RMSE** (this is `combined_score` in `src/cv/evaluate.py`).
+**Public Score ≈ 1 − 0.0843 · AbsMBE − 0.00545 · RMSE**
 
-**Submission format**: 3 columns `ID, TargetMBE, TargetRMSE` with **identical values per row** (experimentally confirmed 2026-05-14). A probe submission with `TargetMBE = preds + 100` and `TargetRMSE = preds` was rejected by Zindi with "There was a problem while processing your submission" — file was structurally identical to the accepted baseline in every other respect (shape, columns, dtypes, IDs, no NaNs, in-range values). **The MBE-vs-RMSE column trick is not a real lever — investigation closed for good.** Always write the same value to both columns.
+Verified against 3 submissions:
+- baseline:  1 − 0.0843·4.98 − 0.00545·88.08 = 0.100 (actual 0.0993)
+- solar corrected: 1 − 0.0843·6.06 − 0.00545·86.62 = 0.017 (actual 0.0163)
+- solar raw: 1 − 0.0843·44.59 − 0.00545·326.05 = −4.536 (actual −4.5364)
 
-**LB vs CV scale**: Zindi normalizes the LB score (e.g., baseline CV combined 50.70 in W/m² maps to LB 0.099). Normalization is undocumented but constant, so relative improvements in CV should track relative improvements on LB.
+**Per unit, AbsMBE is 15.5× more valuable to fix than RMSE.** This is the most important fact about the competition.
+
+**Note on "AbsMBE"**: it is *not* simple global \|mean(pred − true)\|. A constant +3.32 shift on all predictions changed AbsMBE from 44.59 → 6.06 — far more than the 3.32 expected from a global shift. Most likely Zindi computes per-station signed MBE then averages the absolute values (so a global shift interacts with per-station sign patterns), or some similar per-group aggregation. **This means per-station bias correction is dramatically more valuable than a single global shift.**
+
+**Submission format**: 3 columns `ID, TargetMBE, TargetRMSE` with **identical values per row** (experimentally confirmed). A probe submission with non-identical columns was rejected. Always write the same value to both columns. Column-split investigation closed for good.
 
 ---
 
@@ -146,8 +151,9 @@ python -m src.submit --config config/config.yaml
 
 | Exp # | Description | LOMO combined (PRIMARY) | GroupKFoldByYear combined | TimeForward combined | LB (public) | Notes |
 |-------|-------------|--------|---------|-------------|-------------|-------|
-| exp_001_lgbm_baseline | LightGBM, time features + station categorical | **50.70** (\|MBE\|=1.07, RMSE=100.33) | 77.64 (ratio 1.53 — 🚩 year overfit) | 50.57 (ratio 1.00 — no leakage ✓) | **0.099254** | LB-vs-CV scale ≈ 0.00196 |
-| exp_002_lgbm_solar | Adds pvlib solar geometry (zenith, elevation, cos_zenith, clearsky GHI/DNI/DHI, is_daylight) | **51.26** (\|MBE\|=3.32, RMSE=99.20) | 65.87 (ratio 1.28) ← year-overfit gap shrunk by ~30% | 51.01 (ratio 1.00) | submission_002b_lgbm_solar_corrected pending upload | Solar features replace hour features (75% of gain → physics features 81%). RMSE improved 1.13 but \|MBE\| degraded 2.25 due to systematic −3.32 W/m² under-prediction (clearsky is theoretical ceiling). Bias correction applied in submission_002b: predicted LB ≈ 0.097 |
+| exp_001_lgbm_baseline | LightGBM, time features + station categorical | **50.70** (CV \|MBE\|=1.07, RMSE=100.33) | 77.64 (ratio 1.53 — 🚩 year overfit) | 50.57 (ratio 1.00) | **0.099254** | LB AbsMBE=4.98, RMSE=88.08. CV pooled \|MBE\| was 5× too optimistic. CV RMSE was 12 W/m² too pessimistic. |
+| exp_002_lgbm_solar | Adds pvlib solar geometry | 51.26 (CV \|MBE\|=3.32, RMSE=99.20) | 65.87 (year ratio 1.28) | 51.01 | **−4.536** raw / **0.016** corrected | DISASTER on LB. Raw AbsMBE blew up to 44.59, RMSE to 326. Solar features destabilize per-station predictions; CV does not catch this. Bias correction recovered AbsMBE to 6.06 but score still below baseline. Solar features are not viable as-is. |
+| submission_003_baseline_per_station_corrected | exp_001 predictions − per-station OOF MBE | (no CV — bias correction step) | — | — | pending upload | If per-station correction works as expected, predicted LB ≈ 0.40–0.52 (vs baseline 0.099). Big bet — first real test of the "AbsMBE is per-station aggregated" hypothesis. |
 
 ### Feature importance (exp_001)
 
@@ -155,11 +161,14 @@ Top 5 features = 84% of total gain. Hour-of-day (`hour_cos`, `hour`, `hour_sin`)
 
 ### What's queued next (priority order)
 
-1. **Upload submission_002b** to confirm bias-corrected exp_002 beats baseline on LB. Predicted LB ≈ 0.097.
-2. **Per-station bias correction** — subtract per-station mean residual instead of a single global shift. Some stations have larger systematic bias than others (TA00348 had \|MBE\|≈29 in exp_002). Targets \|MBE\| more precisely.
-3. **Weather lag/rolling features** — humidity and temperature lags within station-day. Captures cloud-cover transients that clearsky misses.
-4. **XGBoost and CatBoost** for model diversity, then ensemble.
-5. **LightGBM hyperparameter tuning** — last lever once features and ensemble are exhausted.
+1. **Upload submission_003** (per-station bias-corrected baseline). Predicted LB jump from 0.099 → 0.4–0.5. If this works, per-station bias correction becomes a permanent step in the pipeline.
+2. **If #1 works**: refine the per-station MBE estimate. Use per-fold per-station signed MBE instead of just OOF aggregate (more robust against fold-wise sign cancellation). Submit as 003b.
+3. **Custom training objective**: train LightGBM with an objective that directly approximates `0.0843·|MBE| + 0.00545·RMSE`. The default `regression` objective optimizes pure squared error, which is 15× under-weighted relative to what the LB cares about. A custom objective could give big gains.
+4. **Weather lag/rolling features** — captures cloud-cover transients that the model currently can't see.
+5. **XGBoost and CatBoost** for model diversity, then ensemble.
+6. **LightGBM hyperparameter tuning** — last lever once features and ensemble are exhausted.
+
+(Solar features are paused — they destabilize per-station predictions in a way CV does not capture. Possibly revisit with elevation-restricted clearsky model or African-tuned Linke turbidity, but not a priority.)
 
 ### Decisions made
 
