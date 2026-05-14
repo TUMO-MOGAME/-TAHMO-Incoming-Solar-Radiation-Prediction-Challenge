@@ -49,7 +49,7 @@ The competition (per Zindi page, confirmed 2026-05-14) computes:
 - **RMSE** = `sqrt(mean((y_pred - y_true)^2))`.
 - **LB score = 0.5 * |MBE| + 0.5 * RMSE** (this is `combined_score` in `src/cv/evaluate.py`).
 
-**Submission format**: 3 columns `ID, TargetMBE, TargetRMSE`. Zindi's docs say values "should be identical" but the existence of two separate columns strongly suggests each is scored against its respective metric independently. We treat identity as the baseline/starter convention, **not a hard constraint**. Optimization lever: put a bias-corrected prediction in `TargetMBE` and the raw RMSE-optimal prediction in `TargetRMSE`. **Verify before relying on it** with a probe submission containing deliberately different values per column — if LB score changes vs the identical-column baseline, columns score independently.
+**Submission format**: 3 columns `ID, TargetMBE, TargetRMSE` with **identical values per row** (experimentally confirmed 2026-05-14). A probe submission with `TargetMBE = preds + 100` and `TargetRMSE = preds` was rejected by Zindi with "There was a problem while processing your submission" — file was structurally identical to the accepted baseline in every other respect (shape, columns, dtypes, IDs, no NaNs, in-range values). **The MBE-vs-RMSE column trick is not a real lever — investigation closed for good.** Always write the same value to both columns.
 
 **LB vs CV scale**: Zindi normalizes the LB score (e.g., baseline CV combined 50.70 in W/m² maps to LB 0.099). Normalization is undocumented but constant, so relative improvements in CV should track relative improvements on LB.
 
@@ -141,11 +141,10 @@ Top 5 features = 84% of total gain. Hour-of-day (`hour_cos`, `hour`, `hour_sin`)
 ### What's queued next (priority order)
 
 1. **Solar geometry features via pvlib** — solar zenith, azimuth, clearsky GHI, day_length, is_daylight. Expected biggest single jump because hour-of-day is currently doing all this work implicitly.
-2. **Probe submission: confirm whether TargetMBE and TargetRMSE columns score independently** (see §3). One submission with deliberately different values per column; compare to baseline LB 0.099254.
-3. **Weather lag/rolling features** — humidity and temperature lags within station-day.
-4. **Per-station bias correction** — per-station mean residual subtraction; if columns score independently this becomes especially valuable for TargetMBE.
-5. **XGBoost and CatBoost** for model diversity, then ensemble.
-6. **LightGBM hyperparameter tuning** — last lever once features and ensemble are exhausted.
+2. **Weather lag/rolling features** — humidity and temperature lags within station-day.
+3. **Per-station bias correction** — subtract per-station mean residual from predictions (both columns since identity required). Targets the |MBE| half of the metric.
+4. **XGBoost and CatBoost** for model diversity, then ensemble.
+5. **LightGBM hyperparameter tuning** — last lever once features and ensemble are exhausted.
 
 ### Decisions made
 
