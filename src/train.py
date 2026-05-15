@@ -1,8 +1,8 @@
 """Train the final model on all training data and persist it.
 
 Reads the best_iteration from a prior CV experiment (mean across folds) and
-trains a single LightGBM on the full training set for that many rounds.
-Saves the model + metadata so predict.py can load it without re-running CV.
+trains a single model (LightGBM or XGBoost) on the full training set for
+that many rounds. Saves the model + metadata so predict.py can reload it.
 
 Usage:
     python -m src.train --config config/config.yaml \
@@ -19,6 +19,7 @@ import pandas as pd
 
 from src.features.build_features import build_feature_matrix
 from src.models.lgbm import LightGBMRegressor
+from src.models.xgb import XGBoostRegressor
 from src.utils.io import load_config, read_parquet, resolve_path
 from src.utils.logging import setup_logger
 from src.utils.seed import set_seed
@@ -35,6 +36,20 @@ def _read_cv_best_iter(exp_dir, default: int) -> int:
     return int(math.ceil(df["best_iteration"].dropna().mean()))
 
 
+def _train_and_save(model, X, y, cat_features, models_dir, experiment, active):
+    """Fit, persist model file in active-specific format, return saved path."""
+    model.fit(X, y, categorical_features=cat_features)
+    if active == "lightgbm":
+        path = models_dir / f"{experiment}.txt"
+        model.booster_.save_model(str(path))
+    elif active == "xgboost":
+        path = models_dir / f"{experiment}.ubj"   # XGBoost native binary format
+        model.booster_.save_model(str(path))
+    else:
+        raise NotImplementedError(f"Save not implemented for '{active}'")
+    return path
+
+
 def main(config_path: str, features_path: str, model_path: str, experiment: str) -> None:
     log = setup_logger()
     cfg = load_config(config_path)
@@ -43,8 +58,8 @@ def main(config_path: str, features_path: str, model_path: str, experiment: str)
     set_seed(cfg["project"]["seed"])
 
     active = mcfg["active"]
-    if active != "lightgbm":
-        raise NotImplementedError(f"Only lightgbm is wired up so far (got '{active}').")
+    if active not in ("lightgbm", "xgboost"):
+        raise NotImplementedError(f"Only lightgbm and xgboost are wired (got '{active}').")
 
     exp_dir = resolve_path(cfg["paths"]["experiments_dir"]) / experiment
     models_dir = resolve_path(cfg["paths"]["models_dir"])
@@ -61,19 +76,21 @@ def main(config_path: str, features_path: str, model_path: str, experiment: str)
     )
     log.info("X shape: %s, categorical: %s", X.shape, cat_features)
 
-    default_rounds = mcfg["lightgbm"]["training"]["num_boost_round"]
+    default_rounds = mcfg[active]["training"]["num_boost_round"]
     best_iter = _read_cv_best_iter(exp_dir, default_rounds)
     log.info("Training rounds (mean of CV best_iter, fallback default): %d", best_iter)
 
-    training = dict(mcfg["lightgbm"]["training"])
+    training = dict(mcfg[active]["training"])
     training["num_boost_round"] = best_iter
     training["early_stopping_rounds"] = 0   # no holdout in final fit
 
-    model = LightGBMRegressor(mcfg["lightgbm"]["params"], training)
-    model.fit(X, y, categorical_features=cat_features)
+    if active == "lightgbm":
+        model = LightGBMRegressor(mcfg["lightgbm"]["params"], training)
+    else:
+        model = XGBoostRegressor(mcfg["xgboost"]["params"], training)
 
-    model_path_out = models_dir / f"{experiment}.txt"
-    model.booster_.save_model(str(model_path_out))
+    # XGBoost categorical features need pandas Categorical dtype already set by build_feature_matrix
+    model_path_out = _train_and_save(model, X, y, cat_features, models_dir, experiment, active)
 
     metadata = {
         "experiment": experiment,
@@ -83,6 +100,7 @@ def main(config_path: str, features_path: str, model_path: str, experiment: str)
         "station_categories": station_categories,
         "num_boost_round": best_iter,
         "n_train_rows": int(len(y)),
+        "model_file": model_path_out.name,
     }
     meta_path = models_dir / f"{experiment}_metadata.json"
     with open(meta_path, "w") as f:

@@ -1,0 +1,9 @@
+{
+  "strategy": "leave_one_month_out",
+  "primary": true,
+  "n": 642175,
+  "mbe_signed": -1.5554070888400102,
+  "abs_mbe": 1.5554070888400102,
+  "rmse": 100.52845824359967,
+  "combined": 51.04193266621984
+}

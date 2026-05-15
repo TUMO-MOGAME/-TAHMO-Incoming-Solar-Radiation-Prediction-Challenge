@@ -28,6 +28,7 @@ from src.cv.evaluate import evaluate
 from src.cv.splitters import make_splitters
 from src.features.build_features import build_feature_matrix
 from src.models.lgbm import LightGBMRegressor
+from src.models.xgb import XGBoostRegressor
 from src.utils.io import load_config, read_parquet, resolve_path, write_parquet
 from src.utils.logging import setup_logger
 from src.utils.seed import set_seed
@@ -37,6 +38,8 @@ def build_model(model_cfg: dict):
     active = model_cfg["active"]
     if active == "lightgbm":
         return LightGBMRegressor(model_cfg["lightgbm"]["params"], model_cfg["lightgbm"]["training"])
+    if active == "xgboost":
+        return XGBoostRegressor(model_cfg["xgboost"]["params"], model_cfg["xgboost"]["training"])
     raise NotImplementedError(f"Model '{active}' not yet wired into run_cv.py")
 
 

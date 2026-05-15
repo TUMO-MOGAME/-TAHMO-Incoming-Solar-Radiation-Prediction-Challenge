@@ -153,22 +153,30 @@ python -m src.submit --config config/config.yaml
 |-------|-------------|--------|---------|-------------|-------------|-------|
 | exp_001_lgbm_baseline | LightGBM, time features + station categorical | **50.70** (CV \|MBE\|=1.07, RMSE=100.33) | 77.64 (ratio 1.53 — 🚩 year overfit) | 50.57 (ratio 1.00) | **0.099254** | LB AbsMBE=4.98, RMSE=88.08. CV pooled \|MBE\| was 5× too optimistic. CV RMSE was 12 W/m² too pessimistic. |
 | exp_002_lgbm_solar | Adds pvlib solar geometry | 51.26 (CV \|MBE\|=3.32, RMSE=99.20) | 65.87 (year ratio 1.28) | 51.01 | **−4.536** raw / **0.016** corrected | DISASTER on LB. Raw AbsMBE blew up to 44.59, RMSE to 326. Solar features destabilize per-station predictions; CV does not catch this. Bias correction recovered AbsMBE to 6.06 but score still below baseline. Solar features are not viable as-is. |
-| submission_003_baseline_per_station_corrected | exp_001 predictions − per-station OOF MBE | (no CV — bias correction step) | — | — | pending upload | If per-station correction works as expected, predicted LB ≈ 0.40–0.52 (vs baseline 0.099). Big bet — first real test of the "AbsMBE is per-station aggregated" hypothesis. |
+| submission_003_baseline_per_station_corrected | exp_001 predictions − per-station OOF MBE | (no CV — bias correction step) | — | — | **0.098839** (LB AbsMBE=4.989, RMSE=88.068) | DEAD END. Per-station OOF MBE has near-zero predictive power for whatever "AbsMBE" actually measures on test. Bias correction via after-the-fact shifts will not work. Real gains must come from changing the model. |
+| exp_003_xgb_baseline | XGBoost, same features as exp_001 (time + station categorical, no solar) | **51.04** (CV \|MBE\|=1.55, RMSE=100.53) | 99.45 (year ratio **1.95** 🚩 worse than LGBM) | 50.81 (ratio 1.00) | submission_004_xgb_baseline pending upload | Essentially tied with LightGBM on primary CV (51.04 vs 50.70). XGBoost is more fragile across years (year ratio 1.95 vs LGBM 1.53). Both GBDTs hitting the same ~50.7 ceiling — suggests further gains require features or training-objective changes, not model swap. |
 
 ### Feature importance (exp_001)
 
 Top 5 features = 84% of total gain. Hour-of-day (`hour_cos`, `hour`, `hour_sin`) alone is ~75%. `temperature` (#3), `station` (#4), `latitude`/`longitude` follow. **`month` and cyclical month features are weak** — the model is correctly distrustful of features that take values it has never seen in train. This is a strong signal that solar-geometry features (zenith angle, theoretical clearsky GHI) should improve scores substantially.
 
+### Strategy update (2026-05-15)
+
+Per-station bias correction failed (003 = 0.0988 vs baseline 0.0993 — no change). After-the-fact shifts are dead. Bias correction angle exhausted; gains must now come from the model itself or features.
+
+**New plan: baseline every model first, then revisit FE on the best model.**
+
 ### What's queued next (priority order)
 
-1. **Upload submission_003** (per-station bias-corrected baseline). Predicted LB jump from 0.099 → 0.4–0.5. If this works, per-station bias correction becomes a permanent step in the pipeline.
-2. **If #1 works**: refine the per-station MBE estimate. Use per-fold per-station signed MBE instead of just OOF aggregate (more robust against fold-wise sign cancellation). Submit as 003b.
-3. **Custom training objective**: train LightGBM with an objective that directly approximates `0.0843·|MBE| + 0.00545·RMSE`. The default `regression` objective optimizes pure squared error, which is 15× under-weighted relative to what the LB cares about. A custom objective could give big gains.
-4. **Weather lag/rolling features** — captures cloud-cover transients that the model currently can't see.
-5. **XGBoost and CatBoost** for model diversity, then ensemble.
-6. **LightGBM hyperparameter tuning** — last lever once features and ensemble are exhausted.
+1. **exp_003_xgb_baseline** — XGBoost with same features as exp_001 (time + station categorical, no solar). Full pipeline (CV → train → predict → submit). In progress.
+2. **exp_004_catboost_baseline** — same setup, CatBoost.
+3. **Optional**: exp_005_rf_baseline — RandomForest as non-boosted diversity check.
+4. After all baselines done: pick best 1-2 models, build a blend, only then go back to feature engineering.
+5. **Custom training objective** — once we have a "best" base model, train it with a custom loss that approximates `0.0843·|MBE| + 0.00545·RMSE`. The default regression objective under-weights bias 15×.
+6. **Weather lag/rolling features** — captures cloud-cover transients.
+7. **LightGBM/XGB/CatBoost hyperparameter tuning** — last lever once features and ensemble are exhausted.
 
-(Solar features are paused — they destabilize per-station predictions in a way CV does not capture. Possibly revisit with elevation-restricted clearsky model or African-tuned Linke turbidity, but not a priority.)
+(Solar features paused — destabilize per-station predictions; CV doesn't catch it.)
 
 ### Decisions made
 

@@ -1,0 +1,10 @@
+Strategy                 Folds          N    |MBE|     RMSE  Combined
+---------------------------------------------------------------------
+leave_one_month_out [P]      6     642175    1.555  100.528    51.042
+group_kfold_by_year          5     642175   12.124  186.780    99.452
+time_forward                 4     513725    2.625   98.990    50.808
+
+Interpretation rules (lower = better):
+  Primary (decisions): leave_one_month_out -> combined = 51.042
+  group_kfold_by_year      ratio=1.95  FLAG: scores much worse than primary -> possible distribution-shift fragility
+  time_forward             ratio=1.00  OK: roughly tracks primary

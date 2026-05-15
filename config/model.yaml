@@ -1,6 +1,6 @@
 # Active model + hyperparameters. Switch `active` to use a different model.
 
-active: lightgbm
+active: xgboost
 
 lightgbm:
   params:

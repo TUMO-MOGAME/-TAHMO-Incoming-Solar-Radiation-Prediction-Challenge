@@ -1,0 +1,27 @@
+# Feature group toggles. Set false to ablate a feature group during experiments.
+
+time:
+  enabled: true
+  include_raw: [year, month, day, hour, minute, day_of_week, day_of_year]
+  cyclical: [hour, month, day_of_year]
+
+solar_geometry:
+  enabled: false   # paused — destabilized predictions on test (exp_002 LB disaster).
+  # When enabled, computed per-station via pvlib. Cached to
+  # data/processed/{train,test}_solar.parquet. Columns added:
+  #   solar_zenith, solar_elevation, cos_zenith,
+  #   clearsky_ghi, clearsky_dni, clearsky_dhi, is_daylight
+
+weather_lags:
+  enabled: false
+  columns:
+    - "relativehumidity (-)"
+    - "temperature (degrees Celsius)"
+    - "precipitation (mm)"
+  lag_steps: [1, 2, 4]              # 15-min steps → 15min, 30min, 1h
+  rolling_windows: [4, 8, 16]       # 1h, 2h, 4h rolling means
+
+station_features:
+  enabled: false
+  target_encoding: false             # CV-safe target encoding of station
+  station_categorical: true          # pass station as a categorical to the model

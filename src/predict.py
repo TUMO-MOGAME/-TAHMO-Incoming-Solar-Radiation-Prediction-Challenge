@@ -12,10 +12,31 @@ import json
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 
 from src.features.build_features import build_feature_matrix
 from src.utils.io import load_config, read_parquet, resolve_path, write_parquet
 from src.utils.logging import setup_logger
+
+
+def _load_booster(model_type: str, model_file):
+    if model_type == "lightgbm":
+        return lgb.Booster(model_file=str(model_file))
+    if model_type == "xgboost":
+        booster = xgb.Booster()
+        booster.load_model(str(model_file))
+        return booster
+    raise NotImplementedError(f"Unknown model_type: {model_type}")
+
+
+def _predict(booster, model_type: str, X: pd.DataFrame, cat_features: list[str]) -> np.ndarray:
+    if model_type == "lightgbm":
+        return booster.predict(X)
+    if model_type == "xgboost":
+        enable_cat = bool(cat_features)
+        dmat = xgb.DMatrix(X, enable_categorical=enable_cat)
+        return booster.predict(dmat)
+    raise NotImplementedError(f"Unknown model_type: {model_type}")
 
 
 def main(config_path: str, features_path: str, experiment: str) -> None:
@@ -24,20 +45,27 @@ def main(config_path: str, features_path: str, experiment: str) -> None:
     fcfg = load_config(features_path)
 
     models_dir = resolve_path(cfg["paths"]["models_dir"])
-    model_file = models_dir / f"{experiment}.txt"
     meta_file = models_dir / f"{experiment}_metadata.json"
-    if not model_file.exists() or not meta_file.exists():
-        raise FileNotFoundError(
-            f"Model or metadata missing for '{experiment}'. Run train.py first."
-        )
+    if not meta_file.exists():
+        raise FileNotFoundError(f"Metadata missing for '{experiment}'. Run train.py first.")
 
     with open(meta_file) as f:
         metadata = json.load(f)
-    log.info("Loaded metadata: features=%d, categorical=%s, rounds=%d",
-             len(metadata["feature_names"]), metadata["categorical_features"],
-             metadata["num_boost_round"])
 
-    booster = lgb.Booster(model_file=str(model_file))
+    model_type = metadata.get("model_type", "lightgbm")
+    model_filename = metadata.get(
+        "model_file",
+        f"{experiment}.txt" if model_type == "lightgbm" else f"{experiment}.ubj",
+    )
+    model_file = models_dir / model_filename
+    if not model_file.exists():
+        raise FileNotFoundError(f"Model file missing: {model_file}")
+
+    log.info("Model: %s | features=%d | categorical=%s | rounds=%d",
+             model_type, len(metadata["feature_names"]),
+             metadata["categorical_features"], metadata["num_boost_round"])
+
+    booster = _load_booster(model_type, model_file)
 
     log.info("Loading interim test parquet...")
     test = read_parquet(cfg["paths"]["test_interim"])
@@ -55,7 +83,7 @@ def main(config_path: str, features_path: str, experiment: str) -> None:
         )
 
     log.info("Predicting %d rows...", len(X_test))
-    raw_preds = booster.predict(X_test)
+    raw_preds = _predict(booster, model_type, X_test, cat_features)
     clip_min = cfg["evaluation"]["clip_min"]
     clip_max = cfg["evaluation"]["clip_max"]
     preds = np.clip(raw_preds, clip_min, clip_max)

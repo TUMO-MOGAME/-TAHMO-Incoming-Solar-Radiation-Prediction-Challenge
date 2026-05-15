@@ -6,9 +6,9 @@ time:
   cyclical: [hour, month, day_of_year]
 
 solar_geometry:
-  enabled: true
-  # Computed per-station via pvlib. Cached to data/processed/{train,test}_solar.parquet.
-  # Columns added:
+  enabled: false   # paused — destabilized predictions on test (exp_002 LB disaster).
+  # When enabled, computed per-station via pvlib. Cached to
+  # data/processed/{train,test}_solar.parquet. Columns added:
   #   solar_zenith, solar_elevation, cos_zenith,
   #   clearsky_ghi, clearsky_dni, clearsky_dhi, is_daylight
 
